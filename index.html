@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.buymeacoffee.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://cdn.buymeacoffee.com;">
   <title>PDFolio: OSS PDF Portfolio Generator</title>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./ui.css">
@@ -79,9 +79,10 @@
   <div id="firstRunModal" class="modal">
     <div class="modal-content">
       <h2>Welcome to PDFolio</h2>
-      <p style="margin:0 0 8px 0">PDFolio is a fast, no‑signup portfolio builder that exports beautiful PDFs.</p>
-      <p class="small" style="margin:0 0 8px 0;color:var(--muted)">It runs entirely in your browser. Your images and text never leave your device unless you choose to export or download.</p>
-      <p class="small" style="margin:0 0 16px 0;color:var(--muted)">It’s open‑source software — community‑driven and free to use.</p>
+      <p style="margin:0 0 8px 0">PDFolio (web version) is a fast, no‑signup portfolio builder that exports beautiful PDFs.</p>
+      <p class="small" style="margin:0 0 8px 0;color:var(--muted)">It runs entirely in your browser. Your images and text never leave your device.</p>
+      <p class="small" style="margin:0 0 8px 0;color:var(--muted)">It’s open‑source software and free to use.</p>
+      <p class="small" style="margin:0 0 16px 0;color:var(--muted)">For best stability, the desktop version of <a href="https://github.com/kabiur-riyad/PDFolio-Desktop" target="_blank" rel="noopener">PDFolio</a> is more tested and has fewer bugs.</p>
       <div class="buttons" style="display:flex;gap:8px;justify-content:flex-end">
         <button type="button" id="openPortfolioBtn" class="btn secondary">Open…</button>
         <button type="button" id="createPortfolioBtn" class="btn">Create New</button>
@@ -219,7 +220,7 @@
       </button>
       <button id="printBtn" class="btn">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2Zm14-9h-4V3H9v8H5l7 7l7-7Z"/></svg>
-        <span>Export as PDF</span>
+        <span>Save as PDF</span>
       </button>
       <div class="io-group">
         <button id="exportJsonBtn" class="btn">
@@ -253,7 +254,10 @@
         <p class="small">• Use arrows to reorder pages.</p>
         <p class="small">• Use "Export JSON" to download your portfolio JSON.</p>
         <p class="small">• Use "Import JSON" to load a previously saved portfolio.</p>
-        <p class="small">• Click "Export as PDF" to generate a PDF using jsPDF.</p>
+        <p class="small">• Click "Save as PDF" to save a PDF via your browser's print dialog.</p>
+        <div style="margin-top:12px; display:flex; justify-content:center;">
+          <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="riiyad" data-color="#FFDD00" data-emoji=""  data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
+        </div>
       </div>
     </aside>
 

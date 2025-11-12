@@ -327,19 +327,24 @@ const uiSettings = (() => {
   const uiDarkPref = ls ? ls.getItem('uiDark') : null; // '1' | '0' | null
   const autosavePref = ls ? ls.getItem('autosave') : null;
   const systemDark = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
-  return {
+  const settings = {
     // Default to light mode if no explicit preference is stored
     uiDark: uiDarkPref === '1' ? true : uiDarkPref === '0' ? false : false,
     autosave: autosavePref === '1'
   };
+  // Persist explicit light preference to avoid system scheme flips (e.g., during print)
+  try { if (ls && uiDarkPref === null) ls.setItem('uiDark', settings.uiDark ? '1' : '0'); } catch {}
+  return settings;
 })();
 
 function applyUiTheme() {
   try {
     if (document.body) {
-      document.body.setAttribute('data-ui-theme', uiSettings.uiDark ? 'dark' : 'light');
+      const forceLight = document.documentElement && document.documentElement.getAttribute('data-force-light') === '1';
+      const themeName = forceLight ? 'light' : (uiSettings.uiDark ? 'dark' : 'light');
+      document.body.setAttribute('data-ui-theme', themeName);
     }
-    if (window.electronAPI && window.electronAPI.setNativeTheme) {
+    if (!(typeof __printing !== 'undefined' && __printing) && window.electronAPI && window.electronAPI.setNativeTheme) {
       const source = (typeof localStorage !== 'undefined' && localStorage.getItem('uiDark') !== null)
         ? (uiSettings.uiDark ? 'dark' : 'light')
         : 'system';
@@ -367,20 +372,39 @@ try {
   }, true);
 } catch {}
 
-// Follow system dark mode globally if no explicit preference
+// Follow system dark mode globally if no explicit preference (disabled to avoid print-time flips)
+let __printing = false;
+let __prevUiDark = null;
+let __prevHadExplicitUiPref = null;
 try {
-  const media = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-  const onSchemeChange = (e) => {
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('uiDark') === null) {
-      uiSettings.uiDark = !!e.matches;
-      applyUiTheme();
-    }
-  };
-  if (media) {
-    if (typeof media.addEventListener === 'function') media.addEventListener('change', onSchemeChange);
-    else if (typeof media.addListener === 'function') media.addListener(onSchemeChange);
-  }
+  window.addEventListener('beforeprint', () => {
+    __printing = true;
+    __prevUiDark = uiSettings.uiDark;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        __prevHadExplicitUiPref = localStorage.getItem('uiDark') !== null;
+        // Lock the current theme as explicit to stop system-sync while printing
+        localStorage.setItem('uiDark', uiSettings.uiDark ? '1' : '0');
+      }
+    } catch {}
+    // Force light UI while printing to avoid sudden dark flip
+    uiSettings.uiDark = false;
+    try { if (document && document.documentElement) document.documentElement.setAttribute('data-force-light', '1'); } catch {}
+    applyUiTheme();
+  });
+  window.addEventListener('afterprint', () => {
+    __printing = false;
+    if (__prevUiDark !== null) uiSettings.uiDark = __prevUiDark;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (!__prevHadExplicitUiPref) localStorage.removeItem('uiDark');
+      }
+    } catch {}
+    try { if (document && document.documentElement) document.documentElement.removeAttribute('data-force-light'); } catch {}
+    applyUiTheme();
+  });
 } catch {}
+// Intentionally not following system theme changes in the web build to ensure stability during print
 
 function setDirty(value) {
   const next = !!value;
@@ -994,9 +1018,9 @@ function applyThemeFromUserInfo() {
   try {
     const root = document.documentElement;
     if (document.body) { document.body.setAttribute('data-theme-preset', userInfo.themePreset); }
-    if (theme.paper) root.style.setProperty('--page-paper', theme.paper);
-    if (theme.text) root.style.setProperty('--page-text', theme.text);
-    if (theme.muted) root.style.setProperty('--page-muted', theme.muted);
+    if (theme.paper) { root.style.setProperty('--page-paper', theme.paper); }
+    if (theme.text) { root.style.setProperty('--page-text', theme.text); }
+    if (theme.muted) { root.style.setProperty('--page-muted', theme.muted); }
     if (theme.fontFamily) root.style.setProperty('--page-font-family', theme.fontFamily);
     if (theme.bodyFontSize) root.style.setProperty('--page-body-font-size', theme.bodyFontSize);
   } catch {}
@@ -1018,9 +1042,9 @@ function applyThemeFromWorkingTheme() {
     const defaults = getPresetDefaults(activePreset);
     const t = workingTheme || userInfo.theme || defaults;
     if (document.body) { document.body.setAttribute('data-theme-preset', activePreset); }
-    if (t.paper) root.style.setProperty('--page-paper', t.paper);
-    if (t.text) root.style.setProperty('--page-text', t.text);
-    if (t.muted) root.style.setProperty('--page-muted', t.muted);
+    if (t.paper) { root.style.setProperty('--page-paper', t.paper); }
+    if (t.text) { root.style.setProperty('--page-text', t.text); }
+    if (t.muted) { root.style.setProperty('--page-muted', t.muted); }
     if (t.fontFamily) root.style.setProperty('--page-font-family', t.fontFamily);
     if (t.bodyFontSize) root.style.setProperty('--page-body-font-size', t.bodyFontSize);
   } catch {}
@@ -1200,41 +1224,37 @@ function findIFDEntry(view, ifdOffset, wantedTag, little) { const getU16 = (pos)
 function readAscii(view, offset, count) { const chars = []; for (let i = 0; i < count && offset + i < view.byteLength; i++) { const c = view.getUint8(offset + i); if (c === 0) break; chars.push(String.fromCharCode(c)); } return chars.join(''); }
 function parseYearFromExifDate(s) { const m = /^([0-9]{4})/.exec(s || ''); return m ? m[1] : null; }
 
-// Export PDF via jsPDF + html2canvas
+// Export by printing the current window (no new tab), with theme freeze
 async function exportPortfolioAsPDF() {
   try {
-    const lib = window.jspdf;
-    const h2c = window.html2canvas;
-    if (!lib || !lib.jsPDF || !h2c) { alert('PDF export is unavailable in this build.'); return; }
-    const { jsPDF } = lib;
-    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
-    const pageEls = Array.from(document.querySelectorAll('#canvas .page'));
-    if (!pageEls.length) { alert('No pages to export.'); return; }
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    for (let i = 0; i < pageEls.length; i++) {
-      const el = pageEls[i];
-      const bgVar = getComputedStyle(document.documentElement).getPropertyValue('--paper');
-      const bg = (bgVar && bgVar.trim()) || '#ffffff';
-      const canvas = await h2c(el, { scale: 2, backgroundColor: bg });
-      const imgData = canvas.toDataURL('image/png');
-      // Fit image into A4 while preserving aspect ratio
-      const imgRatio = canvas.width / canvas.height;
-      let renderWidth = pageWidth;
-      let renderHeight = renderWidth / imgRatio;
-      if (renderHeight > pageHeight) {
-        renderHeight = pageHeight;
-        renderWidth = renderHeight * imgRatio;
+    const canvas = document.getElementById('canvas');
+    if (!canvas || !canvas.children.length) { alert('Nothing to print.'); return; }
+    // Freeze UI theme to light during print to avoid flicker
+    __prevUiDark = uiSettings.uiDark;
+    __printing = true;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        __prevHadExplicitUiPref = localStorage.getItem('uiDark') !== null;
+        localStorage.setItem('uiDark', '0');
       }
-      const x = (pageWidth - renderWidth) / 2;
-      const y = (pageHeight - renderHeight) / 2;
-      if (i > 0) pdf.addPage();
-      pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
-    }
-    pdf.save('Portfolio.pdf');
-  } catch (e) {
-    alert('PDF export failed.');
-  }
+    } catch {}
+    uiSettings.uiDark = false;
+    try { if (document && document.documentElement) document.documentElement.setAttribute('data-force-light', '1'); } catch {}
+    applyUiTheme();
+    const restore = () => {
+      __printing = false;
+      if (__prevUiDark !== null) uiSettings.uiDark = __prevUiDark;
+      try {
+        if (typeof localStorage !== 'undefined' && !__prevHadExplicitUiPref) localStorage.removeItem('uiDark');
+      } catch {}
+      try { if (document && document.documentElement) document.documentElement.removeAttribute('data-force-light'); } catch {}
+      applyUiTheme();
+    };
+    const onAfterPrint = () => { window.removeEventListener('afterprint', onAfterPrint); restore(); };
+    window.addEventListener('afterprint', onAfterPrint, { once: true });
+    setTimeout(() => { if (__printing) restore(); }, 10000);
+    window.print();
+  } catch { alert('Print is unavailable in this environment.'); }
 }
 
 document.getElementById('printBtn').addEventListener('click', exportPortfolioAsPDF);
