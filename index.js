@@ -1,0 +1,1413 @@
+// Web polyfill for Electron APIs used by the app
+(function(){
+  if (window.electronAPI) return;
+  const supportsFS = 'showOpenFilePicker' in window || 'showSaveFilePicker' in window;
+  let lastHandle = null;
+
+  async function saveWithFS(payload, suggestedName='Portfolio.json') {
+    try {
+      let handle = lastHandle;
+      if (!handle) {
+        if (!window.showSaveFilePicker) throw new Error('File System Access API not available');
+        handle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+        });
+        lastHandle = handle;
+      }
+      const writable = await handle.createWritable();
+      await writable.write(typeof payload === 'string' ? payload : String(payload));
+      await writable.close();
+      try { localStorage.setItem('hasRun', '1'); } catch {}
+      try { localStorage.setItem('lastPortfolioPath', 'web-fs-handle'); } catch {}
+      try { localStorage.setItem('lastPortfolioJson', payload); } catch {}
+      return { success: true, filePath: handle.name || 'Portfolio.json' };
+    } catch (e) {
+      return { success: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+
+  async function openWithFS() {
+    try {
+      if (!window.showOpenFilePicker) throw new Error('File System Access API not available');
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+      });
+      if (!handle) return { success: false, canceled: true };
+      lastHandle = handle;
+      const file = await handle.getFile();
+      const text = await file.text();
+      try { localStorage.setItem('hasRun', '1'); } catch {}
+      try { localStorage.setItem('lastPortfolioPath', 'web-fs-handle'); } catch {}
+      try { localStorage.setItem('lastPortfolioJson', text); } catch {}
+      return { success: true, data: text, filePath: handle.name || file.name };
+    } catch (e) {
+      return { success: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+
+  function downloadBlob(data, filename) {
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function pickJsonViaInput() {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'application/json,.json';
+      input.onchange = () => {
+        const file = input.files && input.files[0];
+        if (!file) { resolve({ success: false, canceled: true }); return; }
+        const reader = new FileReader();
+        reader.onload = () => {
+          try { localStorage.setItem('hasRun', '1'); } catch {}
+          try { localStorage.setItem('lastPortfolioPath', 'web-upload'); } catch {}
+          try { localStorage.setItem('lastPortfolioJson', String(reader.result || '')); } catch {}
+          resolve({ success: true, data: String(reader.result || ''), filePath: file.name });
+        };
+        reader.onerror = () => resolve({ success: false, error: 'Failed to read file' });
+        reader.readAsText(file);
+      };
+      input.click();
+    });
+  }
+
+  window.electronAPI = {
+    exportPDF: async () => { try { window.print(); } catch {} return { success: true }; },
+    selectImages: null,
+    onResetPortfolio: () => {},
+    updateDirtyState: () => {},
+    onRequestSaveBeforeExit: () => {},
+    respondSaveBeforeExit: () => {},
+    onMenuSave: () => {},
+    onMenuOpen: () => {},
+    onMenuNew: () => {},
+    onMenuPreferences: () => {},
+    onMenuExportPdf: () => {},
+    setNativeTheme: async () => ({ success: true, themeSource: 'system' }),
+    openExternal: async (url) => { try { if (url) window.open(url, '_blank', 'noopener,noreferrer'); return { success: true }; } catch (e) { return { success: false, error: String(e) }; } },
+    getAppVersion: async () => ({ success: true, version: 'web' }),
+    savePortfolio: async (jsonData) => {
+      const payload = typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData);
+      if (supportsFS) return saveWithFS(payload);
+      try {
+        downloadBlob(payload, 'Portfolio.json');
+        try { localStorage.setItem('hasRun', '1'); } catch {}
+        try { localStorage.setItem('lastPortfolioPath', 'web-download'); } catch {}
+        try { localStorage.setItem('lastPortfolioJson', payload); } catch {}
+        return { success: true, filePath: 'download' };
+      } catch (e) {
+        return { success: false, error: e && e.message ? e.message : String(e) };
+      }
+    },
+    createNewPortfolio: async (jsonData) => {
+      const payload = typeof jsonData === 'string' ? jsonData : (jsonData ? String(jsonData) : '{"userInfo":{},"pages":[]}');
+      if (supportsFS) return saveWithFS(payload);
+      try {
+        downloadBlob(payload, 'Portfolio.json');
+        try { localStorage.setItem('hasRun', '1'); } catch {}
+        try { localStorage.setItem('lastPortfolioPath', 'web-download'); } catch {}
+        try { localStorage.setItem('lastPortfolioJson', payload); } catch {}
+        return { success: true, filePath: 'download' };
+      } catch (e) {
+        return { success: false, error: e && e.message ? e.message : String(e) };
+      }
+    },
+    openPortfolio: async () => {
+      if (supportsFS) return openWithFS();
+      return pickJsonViaInput();
+    },
+    openPortfolioAt: async (_path) => {
+      try {
+        const data = localStorage.getItem('lastPortfolioJson');
+        if (!data) return { success: false, error: 'No recent portfolio' };
+        return { success: true, data, filePath: 'localStorage' };
+      } catch (e) {
+        return { success: false, error: e && e.message ? e.message : String(e) };
+      }
+    },
+  };
+})();
+
+// --- Below is the renderer logic adapted from the reference app ---
+
+// Prevent browser from opening file when dropped
+window.addEventListener('dragover', e => {
+  e.preventDefault();
+});
+window.addEventListener('drop', e => {
+  e.preventDefault();
+});
+
+const THEME_PRESETS = {
+  default: {
+    paper: '#ffffff',
+    text: '#0b0b0b',
+    muted: '#6f6f6f',
+    fontFamily: "Manrope, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
+    bodyFontSize: '14px'
+  },
+  'default-dark': {
+    paper: '#121212',
+    text: '#f5f5f5',
+    muted: '#a0a0a0',
+    fontFamily: "Manrope, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
+    bodyFontSize: '14px'
+  },
+  classic: {
+    paper: '#fdf7ef',
+    text: '#1f1a14',
+    muted: '#887869',
+    fontFamily: "'Garamond', 'Times New Roman', Times, serif",
+    bodyFontSize: '13px'
+  }
+};
+
+// Preferences modal wiring
+const preferencesModal = document.getElementById('preferencesModal');
+const prefUiDarkEl = document.getElementById('prefUiDark');
+const prefAutosaveEl = document.getElementById('prefAutosave');
+const cancelPrefsBtn = document.getElementById('cancelPrefsBtn');
+const savePrefsBtn = document.getElementById('savePrefsBtn');
+
+function openPreferences() {
+  if (prefUiDarkEl) prefUiDarkEl.checked = !!uiSettings.uiDark;
+  if (prefAutosaveEl) prefAutosaveEl.checked = !!uiSettings.autosave;
+  if (preferencesModal) preferencesModal.classList.add('show');
+}
+
+function openUserForm() {
+  const uim = document.getElementById('userInfoModal');
+  if (!uim) return;
+  setUserFormMode(true);
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  const src = userFormDraft || {
+    name: userInfo.name,
+    years: userInfo.years,
+    statement: userInfo.statement,
+    website: userInfo.website,
+    username: userInfo.username,
+    email: userInfo.email,
+    linksRaw: (Array.isArray(userInfo.additionalLinks) && userInfo.additionalLinks.length
+      ? userInfo.additionalLinks.map(l => (l && l.name ? `[${l.name}](${l.url})` : (l && l.url) || '')).filter(Boolean).join(', ')
+      : ''),
+    stylePreset: userInfo.themePreset
+  };
+  setVal('userName', src.name);
+  setVal('userYears', src.years);
+  setVal('userStatement', src.statement);
+  setVal('userWebsite', src.website);
+  setVal('userLinks', src.linksRaw || '');
+  setVal('userUsername', src.username);
+  setVal('userEmail', src.email);
+  syncStylePresetRadios(src.stylePreset || userInfo.themePreset);
+  uim.classList.add('show');
+  wireUserFormModalInteractions();
+}
+
+function setUserFormMode(isEdit) {
+  const uim = document.getElementById('userInfoModal');
+  if (!uim) return;
+  const titleEl = uim.querySelector('.modal-content h2');
+  const descEl = uim.querySelector('.modal-content p');
+  const styleFs = uim.querySelector('fieldset.form-style-preset');
+  if (isEdit) {
+    if (titleEl) titleEl.textContent = 'Edit Form';
+    if (descEl) descEl.textContent = 'Update your details. Changes apply when you Save & Continue.';
+    if (styleFs) styleFs.style.display = 'none';
+  } else {
+    if (titleEl) titleEl.textContent = 'Welcome to PDFolio';
+    if (descEl) descEl.textContent = 'Please provide your information to get started.';
+    if (styleFs) styleFs.style.display = '';
+  }
+}
+
+function readUserFormValues() {
+  const getVal = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const selectedPresetInput = document.querySelector('input[name="stylePreset"]:checked');
+  const stylePreset = (selectedPresetInput && selectedPresetInput.value) || userInfo.themePreset;
+  return {
+    name: getVal('userName'),
+    years: getVal('userYears'),
+    statement: getVal('userStatement'),
+    website: getVal('userWebsite'),
+    username: getVal('userUsername'),
+    email: getVal('userEmail'),
+    linksRaw: getVal('userLinks'),
+    stylePreset
+  };
+}
+
+function wireUserFormModalInteractions() {
+  if (userFormDraftWired) return;
+  userFormDraftWired = true;
+  const uim = document.getElementById('userInfoModal');
+  const form = document.getElementById('userInfoForm');
+  if (!uim || !form) return;
+  uim.addEventListener('click', (e) => {
+    if (e.target === uim) {
+      userFormDraft = readUserFormValues();
+      uim.classList.remove('show');
+    }
+  });
+  const track = () => { userFormDraft = readUserFormValues(); };
+  form.addEventListener('input', track);
+  form.addEventListener('change', track);
+}
+
+if (window.electronAPI && window.electronAPI.onMenuPreferences) {
+  window.electronAPI.onMenuPreferences(openPreferences);
+}
+
+if (cancelPrefsBtn) cancelPrefsBtn.addEventListener('click', () => {
+  if (preferencesModal) preferencesModal.classList.remove('show');
+});
+
+if (savePrefsBtn) savePrefsBtn.addEventListener('click', () => {
+  const nextUiDark = !!(prefUiDarkEl && prefUiDarkEl.checked);
+  const nextAutosave = !!(prefAutosaveEl && prefAutosaveEl.checked);
+  uiSettings.uiDark = nextUiDark;
+  uiSettings.autosave = nextAutosave;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('uiDark', uiSettings.uiDark ? '1' : '0');
+    localStorage.setItem('autosave', uiSettings.autosave ? '1' : '0');
+  }
+  applyUiTheme();
+  if (preferencesModal) preferencesModal.classList.remove('show');
+});
+
+const LEGACY_PRESET_ALIASES = {
+  light: 'default',
+  dark: 'default-dark'
+};
+
+const PRESET_LABELS = {
+  default: 'Default',
+  'default-dark': 'Default (Dark)',
+  classic: 'Classic'
+};
+
+// User info
+let userInfo = {
+  name: '',
+  years: '',
+  statement: '',
+  instagram: '',
+  username: '',
+  email: '',
+  website: '',
+  websiteLabel: '',
+  additionalLinks: [],
+  portfolioLabel: 'Portfolio',
+  themePreset: 'default',
+  theme: { ...THEME_PRESETS.default }
+};
+
+// Draft state for the user form
+let userFormDraft = null;
+let userFormDraftWired = false;
+
+// Portfolio state
+let pages = [];
+
+let isDirty = false;
+
+// UI settings: dark mode and autosave
+const uiSettings = (() => {
+  const ls = (typeof localStorage !== 'undefined') ? localStorage : null;
+  const uiDarkPref = ls ? ls.getItem('uiDark') : null; // '1' | '0' | null
+  const autosavePref = ls ? ls.getItem('autosave') : null;
+  const systemDark = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
+  return {
+    // Default to light mode if no explicit preference is stored
+    uiDark: uiDarkPref === '1' ? true : uiDarkPref === '0' ? false : false,
+    autosave: autosavePref === '1'
+  };
+})();
+
+function applyUiTheme() {
+  try {
+    if (document.body) {
+      document.body.setAttribute('data-ui-theme', uiSettings.uiDark ? 'dark' : 'light');
+    }
+    if (window.electronAPI && window.electronAPI.setNativeTheme) {
+      const source = (typeof localStorage !== 'undefined' && localStorage.getItem('uiDark') !== null)
+        ? (uiSettings.uiDark ? 'dark' : 'light')
+        : 'system';
+      window.electronAPI.setNativeTheme(source);
+    }
+  } catch {}
+}
+applyUiTheme();
+
+// Open external http(s) links in a new tab, but allow downloads and blob/data links
+try {
+  document.addEventListener('click', (e) => {
+    const a = e.target && (e.target.closest ? e.target.closest('a') : null);
+    if (!a || !a.getAttribute) return;
+    const href = a.getAttribute('href');
+    if (!href) return;
+    // Do not hijack downloads or blob/data/internal links
+    if (a.hasAttribute('download')) return;
+    if (/^(blob:|data:|#|\/)/i.test(href)) return;
+    if (!/^https?:/i.test(href)) return;
+    if (window.electronAPI && window.electronAPI.openExternal) {
+      e.preventDefault();
+      window.electronAPI.openExternal(href);
+    }
+  }, true);
+} catch {}
+
+// Follow system dark mode globally if no explicit preference
+try {
+  const media = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+  const onSchemeChange = (e) => {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('uiDark') === null) {
+      uiSettings.uiDark = !!e.matches;
+      applyUiTheme();
+    }
+  };
+  if (media) {
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', onSchemeChange);
+    else if (typeof media.addListener === 'function') media.addListener(onSchemeChange);
+  }
+} catch {}
+
+function setDirty(value) {
+  const next = !!value;
+  if (isDirty !== next) {
+    isDirty = next;
+    if (window.electronAPI && window.electronAPI.updateDirtyState) {
+      try { window.electronAPI.updateDirtyState(next); } catch {}
+    }
+  }
+}
+function markDirty() { setDirty(true); scheduleAutosave(); }
+function clearDirty() { setDirty(false); }
+
+let autosaveTimer = null;
+function scheduleAutosave() {
+  if (!uiSettings.autosave) return;
+  const hasAny = (typeof localStorage !== 'undefined') && !!localStorage.getItem('lastPortfolioJson');
+  if (!hasAny) return;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => { saveCurrentPortfolio(); }, 1500);
+}
+
+// Load on startup
+async function loadUserInfo() {
+  const ls = (typeof localStorage !== 'undefined') ? localStorage : null;
+  const lastJson = ls && ls.getItem('lastPortfolioJson');
+  if (lastJson) {
+    try {
+      const obj = JSON.parse(lastJson);
+      if (obj.userInfo) userInfo = obj.userInfo;
+      if (obj.pages) pages = obj.pages;
+      ensureThemeConsistency();
+      applyThemeFromUserInfo();
+      buildCoverPage();
+      renderPages();
+      clearDirty();
+      ls.setItem('hasRun', '1');
+      return;
+    } catch {}
+  }
+  const hasRun = ls && ls.getItem('hasRun') === '1';
+  if (!hasRun) {
+    ensureThemeConsistency();
+    syncStylePresetRadios();
+    const m = document.getElementById('firstRunModal');
+    if (m) m.classList.add('show');
+    wireFirstRunHandlers();
+    return;
+  }
+  ensureThemeConsistency();
+  applyThemeFromUserInfo();
+  buildCoverPage();
+  renderPages();
+}
+
+function wireFirstRunHandlers() {
+  const createBtn = document.getElementById('createPortfolioBtn');
+  const openBtn = document.getElementById('openPortfolioBtn');
+  if (createBtn) createBtn.onclick = async () => {
+    try {
+      const initial = await getPortfolioPayload();
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('hasRun', '1');
+        localStorage.setItem('lastPortfolioJson', initial);
+      }
+      const m = document.getElementById('firstRunModal');
+      if (m) m.classList.remove('show');
+      const uim = document.getElementById('userInfoModal');
+      if (uim) {
+        setUserFormMode(false);
+        uim.classList.add('show');
+        wireUserFormModalInteractions();
+      }
+      clearDirty();
+    } catch {}
+  };
+  if (openBtn) openBtn.onclick = async () => {
+    try {
+      const res = await (window.electronAPI && window.electronAPI.openPortfolio ? window.electronAPI.openPortfolio() : Promise.resolve({ success: false }));
+      if (res && res.success && res.data) {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('hasRun', '1');
+          localStorage.setItem('lastPortfolioJson', res.data);
+        }
+        const m = document.getElementById('firstRunModal');
+        if (m) m.classList.remove('show');
+        try {
+          const obj = JSON.parse(res.data);
+          if (obj.userInfo) userInfo = obj.userInfo;
+          if (obj.pages) pages = obj.pages;
+          ensureThemeConsistency();
+          applyThemeFromUserInfo();
+          buildCoverPage();
+          renderPages();
+          clearDirty();
+        } catch { alert('Invalid portfolio JSON'); }
+      }
+    } catch {}
+  };
+}
+
+async function saveUserInfo() {}
+
+document.getElementById('userInfoForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const selectedPresetInput = document.querySelector('input[name="stylePreset"]:checked');
+  const selectedPresetRaw = (selectedPresetInput && selectedPresetInput.value) || userInfo.themePreset;
+  const selectedPreset = normalizePresetKey(selectedPresetRaw);
+  const presetDefaults = getPresetDefaults(selectedPreset);
+  const previousPreset = normalizePresetKey(userInfo.themePreset);
+  const mergedTheme = selectedPreset !== previousPreset
+    ? { ...presetDefaults }
+    : { ...presetDefaults, ...(userInfo.theme || {}) };
+
+  const usernameVal = document.getElementById('userUsername').value;
+  const igUrl = getInstagramUrlFromUsername(usernameVal);
+  const websiteVal = normalizeUrl(document.getElementById('userWebsite').value);
+  const addlLinksVal = document.getElementById('userLinks').value;
+  const addlLinks = parseAdditionalLinks(addlLinksVal);
+  userInfo = {
+    name: document.getElementById('userName').value,
+    years: document.getElementById('userYears').value,
+    statement: document.getElementById('userStatement').value,
+    instagram: igUrl,
+    username: usernameVal,
+    email: document.getElementById('userEmail').value,
+    website: websiteVal,
+    websiteLabel: websiteVal ? getHostname(websiteVal) : '',
+    additionalLinks: addlLinks,
+    portfolioLabel: userInfo.portfolioLabel || 'Portfolio',
+    themePreset: selectedPreset,
+    theme: mergedTheme
+  };
+  userFormDraft = null;
+  syncStylePresetRadios(selectedPreset);
+  try { localStorage.setItem('lastPortfolioJson', await getPortfolioPayload()); } catch {}
+  await saveUserInfo();
+  document.getElementById('userInfoModal').classList.remove('show');
+  applyThemeFromUserInfo();
+  buildCoverPage();
+  renderPages();
+  markDirty();
+});
+
+function buildCoverPage() {
+  const coverIndex = pages.findIndex(p => p.type === 'cover');
+  if (coverIndex >= 0) {
+    pages[coverIndex].data = { };
+  } else {
+    pages.unshift({ type: 'cover', data: { }, image: null });
+  }
+}
+
+function initializePages() {
+  if (userInfo.name) {
+    buildCoverPage();
+    renderPages();
+  }
+}
+
+function renderPages() {
+  const canvas = document.getElementById('canvas');
+  canvas.innerHTML = '';
+  if (pages.length === 0) {
+    canvas.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">No pages yet. Add a project or drag an image to get started.</div>';
+    renderPagesList();
+    return;
+  }
+  pages.forEach((p, idx) => {
+    const el = document.createElement('section');
+    el.className = 'page ' + (p.type);
+    el.dataset.index = String(idx);
+
+    if (p.type === 'cover') {
+      el.classList.add('cover');
+      const u = userInfo || {};
+      const igUrl = (u.instagram && u.instagram.trim()) ? u.instagram : getInstagramUrlFromUsername(u.username);
+      const websiteUrl = u.website || '';
+      const additional = Array.isArray(u.additionalLinks) ? u.additionalLinks : [];
+      el.innerHTML = `
+        <div class="label editable portfolio-label">${escapeHtml(u.portfolioLabel || 'Portfolio')}</div>
+        <h1 class="editable name">${escapeHtml(u.name || 'Your Name')}</h1>
+        ${u.years ? `<h2 class="editable years">${escapeHtml(u.years)}</h2>` : ''}
+        ${u.statement ? `<div class="meta editable statement">${escapeHtml(u.statement)}</div>` : ''}
+        <div class="links">
+          ${websiteUrl ? `
+          <div class="social">
+            <a class="icon" href="${escapeHtml(websiteUrl)}" target="_blank" title="Website">
+              <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>
+                <path d='M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm0 2a8 8 0 0 1 7.75 6H14.9a12.4 12.4 0 0 0-2.1-4.82A10.54 10.54 0 0 0 12 4Zm-2.9.68A12.4 12.4 0 0 0 7.4 10H4.25A8 8 0 0 1 9.1 4.68ZM4.25 14H7.4a12.4 12.4 0 0 0 1.7 5.32A8 8 0 0 1 4.25 14ZM12 20a10.54 10.54 0 0 1-.2-1.18A12.4 12.4 0 0 1 14.9 14h4.85A8 8 0 0 1 12 20Zm6.85-10H14.9a12.4 12.4 0 0 1-1.7-5.32A8 8 0 0 1 18.85 10ZM9.1 14H4.25A8 8 0 0 0 9.1 19.32A12.4 12.4 0 0 1 9.1 14Z'/>
+              </svg>
+            </a>
+            <div class="website editable"><a href="${escapeHtml(websiteUrl)}" target="_blank">${escapeHtml((u && u.websiteLabel) || getHostname(websiteUrl))}</a></div>
+          </div>
+          ` : ''}
+          ${igUrl || u.username ? `
+          <div class="social">
+            ${igUrl ? `<a class="icon" href="${escapeHtml(igUrl)}" target="_blank" title="Instagram">
+              <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M7.75 2h8.5A5.75 5.75 0 0 1 22 7.75v8.5A5.75 5.75 0 0 1 16.25 22h-8.5A5.75 5.75 0 0 1 2 16.25v-8.5A5.75 5.75 0 0 1 7.75 2ZM12 7a5 5 0 1 0 0 10a5 5 0 0 0 0-10Zm0 1.5a3.5 3.5 0 1 1 0 7a3.5 3.5 0 0 1 0-7Zm5.25-.25a1 1 0 1 1 0-2a1 1 0 0 1 0 2Z'/></svg>
+            </a>` : ''}
+            ${u.username ? `<div class="username editable"><a href="${escapeHtml(igUrl || '#')}" target="_blank">${escapeHtml(u.username)}</a></div>` : ''}
+          </div>
+          ` : ''}
+          ${additional && additional.length ? `
+          <div class="additional-links editable">
+            ${additional.map(l => `<div><a href="${escapeHtml(l.url)}" target="_blank">${escapeHtml(l.name)}</a></div>`).join('')}
+          </div>
+          ` : ''}
+          ${u.email ? `<div style="margin-top:6px" class="editable email"><a href="mailto:${escapeHtml(u.email)}">${escapeHtml(u.email)}</a></div>` : ''}
+        </div>
+      `;
+    } else if (p.type === 'single') {
+      el.classList.add('single');
+      el.innerHTML = `
+        <div class="image-wrap" data-idx="${idx}">${p.image ? `<img src="${p.image}" alt="${escapeHtml(p.data.title || 'Image')}"/>` : `<div class="placeholder">Drop image here</div>`}</div>
+        <div class="fixed-meta">
+          <div class="header">
+            <div class="title editable">${escapeHtml(p.data.title || 'Untitled')}</div>
+            <div class="year editable">${escapeHtml(p.data.year || '')}</div>
+          </div>
+          <div class="desc editable">${escapeHtml(p.data.desc)}</div>
+        </div>
+      `;
+    } else if (p.type === 'series-cover') {
+      el.classList.add('series-cover');
+      el.innerHTML = `
+        <div class='series-cover'>
+          <div class='series-header'>
+            <div class='title editable'>${escapeHtml(p.data.title || 'Untitled Project')}</div>
+            ${p.data.year ? `<div class='meta editable'>${escapeHtml(p.data.year)}</div>` : ''}
+          </div>
+          ${p.data.desc ? `<div class='series-desc editable'>${escapeHtml(p.data.desc)}</div>` : ''}
+          <div class='series-info'>${escapeHtml(String(p.data.total || 0))} images · Project</div>
+        </div>
+      `;
+    } else if (p.type === 'series-image') {
+      let currentIndexInSeries = 0;
+      for (let i = 0; i <= idx; i++) {
+        if (pages[i].type === 'series-image' && pages[i].seriesTitle === p.seriesTitle) currentIndexInSeries++;
+      }
+      el.classList.add('series-image');
+      el.innerHTML = `
+        <div class="series-tag">Image ${currentIndexInSeries} of ${p.seriesTotal}</div>
+        <div class="image-wrap" data-idx="${idx}">${p.image ? `<img src="${p.image}" alt="${escapeHtml(p.data.title || 'Image')}"/>` : `<div class="placeholder">Drop image for: ${escapeHtml(p.data.title || 'Image ' + currentIndexInSeries)}</div>`}</div>
+        <div class="fixed-meta">
+          <div class="header">
+            <div class="title editable">${escapeHtml(p.data.title || 'Image ' + currentIndexInSeries)}</div>
+            <div class="year editable">${escapeHtml(p.data.year || '')}</div>
+          </div>
+          <div class="desc editable">${escapeHtml(p.data.desc || '')}</div>
+        </div>
+      `;
+    }
+    canvas.appendChild(el);
+  });
+  attachPageInteractions();
+  renderPagesList();
+}
+
+function renderPagesList() {
+  const list = document.getElementById('pagesList');
+  list.innerHTML = '';
+  if (pages.length === 0) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">No pages yet</div>';
+    return;
+  }
+  pages.forEach((p, i) => {
+    const item = document.createElement('div');
+    item.className = 'page-item';
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    if (p.image) {
+      const im = document.createElement('img');
+      im.src = p.image;
+      thumb.appendChild(im);
+    } else {
+      thumb.textContent = (p.type === 'cover' ? 'C' : 'P');
+      thumb.style.fontSize = '24px';
+      thumb.style.color = 'var(--muted)';
+      thumb.style.fontWeight = 'bold';
+    }
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const itemTitle = p.type === 'cover' ? (userInfo && userInfo.name ? userInfo.name : 'Cover') : (p.data.title || p.data.name || p.type);
+    meta.innerHTML = `<div style="font-weight:600">${escapeHtml(itemTitle)}</div><div class="small">${escapeHtml(p.type)} — page ${i + 1}</div>`;
+    const reorder = document.createElement('div');
+    reorder.className = 'reorder';
+    const up = document.createElement('button');
+    up.className = 'btn secondary';
+    up.textContent = '↑';
+    up.onclick = () => { if (i > 0) { swapPages(i, i - 1); } };
+    const down = document.createElement('button');
+    down.className = 'btn secondary';
+    down.textContent = '↓';
+    down.onclick = () => { if (i < pages.length - 1) { swapPages(i, i + 1); } };
+    const del = document.createElement('button');
+    del.className = 'btn secondary';
+    del.textContent = '×';
+    del.style.color = '#ff4444';
+    del.onclick = () => { deletePage(i); };
+    reorder.appendChild(up);
+    reorder.appendChild(down);
+    reorder.appendChild(del);
+    item.appendChild(thumb);
+    item.appendChild(meta);
+    item.appendChild(reorder);
+    list.appendChild(item);
+  });
+
+  const onContext = (e) => {
+    const a = e.target && (e.target.closest ? e.target.closest('a') : null);
+    if (!a) return;
+    e.preventDefault();
+    document.querySelectorAll('.context-menu').forEach(m => m.remove());
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    const btn = document.createElement('button');
+    btn.textContent = 'Edit';
+    btn.onclick = () => {
+      menu.remove();
+      const editableContainer = a.closest('.editable') || a.parentElement;
+      if (editableContainer) {
+        try {
+          if (editableContainer.classList.contains('website')) {
+            const link = editableContainer.querySelector('a');
+            if (link) { editableContainer.textContent = `[${link.textContent}](${link.getAttribute('href') || ''})`; }
+          } else if (editableContainer.classList.contains('additional-links')) {
+            const links = Array.from(editableContainer.querySelectorAll('a'));
+            const lines = links.map(l => `[${l.textContent}](${l.getAttribute('href') || ''})`).join('\n');
+            editableContainer.textContent = lines;
+          }
+        } catch {}
+        editableContainer.setAttribute('contenteditable', 'true');
+        editableContainer.focus();
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editableContainer);
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch {}
+      }
+    };
+    menu.appendChild(btn);
+    document.body.appendChild(menu);
+    const x = e.clientX, y = e.clientY;
+    menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 8) + 'px';
+    menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+    const close = () => { menu.remove(); document.removeEventListener('click', close, true); };
+    setTimeout(() => document.addEventListener('click', close, true), 0);
+  };
+  const canvasEl = document.getElementById('canvas');
+  if (canvasEl && canvasEl.dataset && canvasEl.dataset.cmBound !== '1') {
+    canvasEl.addEventListener('contextmenu', onContext);
+    canvasEl.dataset.cmBound = '1';
+  }
+}
+
+function updateStyleTargetLabel() {
+  const el = document.getElementById('styleTargetLabel');
+  if (!el) return;
+  const name = themeTarget === 'paper' ? 'Page' : themeTarget === 'text' ? 'Text' : 'Secondary Text';
+  el.textContent = `Editing: ${name}`;
+}
+
+function swapPages(a, b) { [pages[a], pages[b]] = [pages[b], pages[a]]; renderPages(); markDirty(); }
+function deletePage(index) { if (confirm('Are you sure you want to delete this page?')) { pages.splice(index, 1); renderPages(); markDirty(); } }
+
+function attachPageInteractions() {
+  document.querySelectorAll('#canvas .editable').forEach(el => {
+    el.ondblclick = (e) => {
+      e.stopPropagation();
+      try {
+        if (el.classList.contains('website')) {
+          const link = el.querySelector('a');
+          if (link) { el.textContent = `[${link.textContent}](${link.getAttribute('href') || ''})`; }
+        } else if (el.classList.contains('additional-links')) {
+          const links = Array.from(el.querySelectorAll('a'));
+          if (links.length) { el.textContent = links.map(l => `[${l.textContent}](${l.getAttribute('href') || ''})`).join('\n'); }
+        }
+      } catch {}
+      el.setAttribute('contenteditable', 'true');
+      el.focus();
+    };
+    el.onblur = () => {
+      el.removeAttribute('contenteditable');
+      const pageEl = el.closest('.page');
+      if (!pageEl) return;
+      const idx = parseInt(pageEl.dataset.index, 10);
+      if (isNaN(idx)) return;
+      const p = pages[idx];
+      const isCover = p && p.type === 'cover';
+      if (el.classList.contains('name')) {
+        const v = el.innerText.trim();
+        if (isCover) { userInfo.name = v; saveUserInfo(); renderPagesList(); markDirty(); return; } else { p.data.name = v; saveUserInfo(); }
+      }
+      if (el.classList.contains('years')) {
+        const v = el.innerText.trim();
+        if (isCover) { userInfo.years = v; saveUserInfo(); renderPagesList(); markDirty(); return; } else { p.data.years = v; saveUserInfo(); }
+      }
+      if (el.classList.contains('statement')) {
+        const v = el.innerText.trim();
+        if (isCover) { userInfo.statement = v; saveUserInfo(); markDirty(); return; } else { p.data.statement = v; saveUserInfo(); }
+      }
+      if (el.classList.contains('website')) {
+        const raw = el.innerText.trim();
+        let url = '';
+        let label = '';
+        const m = raw.match(/^\s*\[([^\]]+)\]\(([^)]+)\)\s*$/);
+        if (m) { label = m[1].trim(); url = normalizeUrl(m[2].trim()); }
+        else { url = normalizeUrl(raw); label = url ? getHostname(url) : ''; }
+        if (isCover) { userInfo.website = url; userInfo.websiteLabel = label; saveUserInfo(); renderPages(); markDirty(); return; }
+        else { p.data.website = url; p.data.websiteLabel = label; saveUserInfo(); renderPages(); markDirty(); return; }
+      }
+      if (el.classList.contains('username')) {
+        const v = el.innerText.trim();
+        if (isCover) { userInfo.username = v; const igUrl = getInstagramUrlFromUsername(v); userInfo.instagram = igUrl; }
+        else { p.data.username = v; userInfo.username = v; const igUrl = getInstagramUrlFromUsername(v); p.data.instagram = igUrl; userInfo.instagram = igUrl; }
+        const a = el.querySelector('a');
+        if (a) { const igUrlNow = getInstagramUrlFromUsername(isCover ? userInfo.username : p.data.username); a.href = igUrlNow || '#'; }
+        const social = el.closest('.social');
+        if (social) {
+          const iconLink = social.querySelector('a.icon');
+          if (iconLink) {
+            const igUrlNow = getInstagramUrlFromUsername(isCover ? userInfo.username : p.data.username);
+            if (igUrlNow) { iconLink.href = igUrlNow; iconLink.style.display = ''; }
+            else { iconLink.removeAttribute('href'); iconLink.style.display = 'none'; }
+          }
+        }
+        saveUserInfo();
+      }
+      if (el.classList.contains('additional-links')) {
+        const raw = el.innerText.replace(/\r/g, '');
+        const links = parseAdditionalLinks(raw);
+        if (isCover) { userInfo.additionalLinks = links; }
+        else { p.data.additionalLinks = links; userInfo.additionalLinks = links; }
+        saveUserInfo();
+        renderPages();
+        markDirty();
+        return;
+      }
+      if (el.classList.contains('email')) {
+        const v = el.innerText.trim();
+        if (isCover) { userInfo.email = v; }
+        else { p.data.email = v; userInfo.email = v; }
+        const a = el.querySelector('a');
+        if (a) { const emailNow = isCover ? userInfo.email : p.data.email; a.href = 'mailto:' + emailNow; a.textContent = emailNow; }
+        saveUserInfo();
+      }
+      if (el.classList.contains('portfolio-label')) {
+        const newLabel = el.innerText.trim();
+        if (isCover) { userInfo.portfolioLabel = newLabel; saveUserInfo(); markDirty(); return; }
+        else { p.data.portfolioLabel = newLabel; userInfo.portfolioLabel = newLabel; saveUserInfo(); }
+      }
+      if (el.classList.contains('title')) p.data.title = el.innerText.trim();
+      if (el.classList.contains('year')) p.data.year = el.innerText.trim();
+      if (el.classList.contains('desc')) p.data.desc = el.innerText.trim();
+      if (el.classList.contains('series-desc')) p.data.desc = el.innerText.trim();
+      renderPagesList();
+      markDirty();
+    };
+  });
+
+  document.querySelectorAll('#canvas .image-wrap').forEach(w => {
+    const idx = parseInt(w.dataset.idx, 10);
+    if (isNaN(idx)) return;
+    ['dragenter', 'dragover'].forEach(ev => w.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); w.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach(ev => w.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); w.classList.remove('drag'); }));
+    w.addEventListener('drop', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!e.dataTransfer) return;
+      const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type && f.type.startsWith('image'));
+      if (files.length === 0) return;
+      const file = files[0];
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        if (ev.target && typeof ev.target.result === 'string') {
+          const dataUrl = ev.target.result;
+          pages[idx].image = dataUrl;
+          try { const year = await extractExifYearFromDataUrl(dataUrl); if (year) { pages[idx].data.year = String(year); } } catch {}
+          markDirty();
+          renderPages();
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  });
+}
+
+// Drag and drop - create single image page
+const dz = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove('drag'); }));
+
+dz.addEventListener('drop', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  if (!e.dataTransfer) return;
+  const files = Array.from(e.dataTransfer.files).filter((f) => f.type && f.type.startsWith('image'));
+  if (files.length === 0) return;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      if (ev.target && typeof ev.target.result === 'string') {
+        const imageCount = pages.filter(p => p.type === 'single').length;
+        const dataUrl = ev.target.result;
+        const page = { type: 'single', data: { title: `Image ${imageCount + 1}`, year: '', desc: '' }, image: dataUrl };
+        pages.push(page);
+        try { const year = await extractExifYearFromDataUrl(dataUrl); if (year) page.data.year = String(year); } catch {}
+        markDirty();
+        renderPages();
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+});
+
+dz.addEventListener('click', async () => { fileInput.click(); });
+
+fileInput.addEventListener('change', () => {
+  const files = Array.from(fileInput.files || []).filter((f) => f.type && f.type.startsWith('image'));
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      if (ev.target && typeof ev.target.result === 'string') {
+        const imageCount = pages.filter(p => p.type === 'single').length;
+        const dataUrl = ev.target.result;
+        const page = { type: 'single', data: { title: `Image ${imageCount + 1}`, year: '', desc: '' }, image: dataUrl };
+        pages.push(page);
+        try { const year = await extractExifYearFromDataUrl(dataUrl); if (year) page.data.year = String(year); } catch {}
+        renderPages();
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+  fileInput.value = '';
+});
+
+// Add Project button
+document.getElementById('addProjectBtn').addEventListener('click', () => {
+  document.getElementById('projectModal').classList.add('show');
+  document.getElementById('projectTitle').value = '';
+  document.getElementById('projectYear').value = '';
+  document.getElementById('projectDescription').value = '';
+  document.getElementById('projectImages').value = '3';
+});
+
+window.closeProjectModal = function() { document.getElementById('projectModal').classList.remove('show'); };
+
+document.getElementById('cancelProjectBtn').addEventListener('click', closeProjectModal);
+
+document.getElementById('projectForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const title = document.getElementById('projectTitle').value;
+  const year = document.getElementById('projectYear').value;
+  const desc = document.getElementById('projectDescription').value;
+  const numImages = parseInt(document.getElementById('projectImages').value, 10);
+  pages.push({ type: 'series-cover', data: { title, year, desc, total: numImages }, image: null, seriesTitle: title });
+  for (let i = 0; i < numImages; i++) {
+    pages.push({ type: 'series-image', data: { title: `Image ${i + 1}`, desc: '' }, image: null, seriesTitle: title, seriesTotal: numImages });
+  }
+  window.closeProjectModal();
+  renderPages();
+  markDirty();
+});
+
+function escapeHtml(s) { if (s === undefined || s === null) return ''; return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function getInstagramUrlFromUsername(value) {
+  if (!value) return '';
+  let v = String(value).trim();
+  if (!v) return '';
+  try { if (/^https?:\/\//i.test(v)) { const u = new URL(v); v = (u.pathname || '').replace(/^\/+/, '').split('/')[0] || ''; } } catch {}
+  v = v.replace(/^@+/, '').replace(/^instagram\.com\//i, '').replace(/^www\.instagram\.com\//i, '').replace(/^\/+/, '');
+  v = v.replace(/[^a-zA-Z0-9._]/g, '');
+  if (!v) return '';
+  return 'https://www.instagram.com/' + encodeURIComponent(v);
+}
+
+function normalizeUrl(url) {
+  if (!url) return '';
+  let v = String(url).trim();
+  if (!v) return '';
+  if (!/^https?:\/\//i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+  try { const u = new URL(v); return u.href; } catch { return ''; }
+}
+
+function getHostname(url) { if (!url) return ''; try { const u = new URL(url); return u.hostname.replace(/^www\./, ''); } catch { return url; } }
+
+function parseAdditionalLinks(input) {
+  if (!input) return [];
+  const items = String(input).split(/\n|,/).map(s => s.trim()).filter(Boolean);
+  const out = [];
+  for (const item of items) {
+    const m = item.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (m) { const name = m[1].trim(); const url = normalizeUrl(m[2].trim()); if (name && url) out.push({ name, url }); continue; }
+    const url = normalizeUrl(item);
+    if (url) { try { const u = new URL(url); out.push({ name: u.hostname, url }); } catch {} }
+  }
+  return out;
+}
+
+function normalizePresetKey(preset) { const key = (preset && preset.trim()) || 'default'; if (THEME_PRESETS[key]) return key; const alias = LEGACY_PRESET_ALIASES[key]; if (alias && THEME_PRESETS[alias]) return alias; return 'default'; }
+function getPresetDefaults(preset) { const key = normalizePresetKey(preset); return THEME_PRESETS[key] || THEME_PRESETS.default; }
+function ensureThemeConsistency() { const presetKey = normalizePresetKey(userInfo.themePreset); userInfo.themePreset = presetKey; const defaults = getPresetDefaults(presetKey); if (!userInfo.theme) { userInfo.theme = { ...defaults }; } else { userInfo.theme = { ...defaults, ...userInfo.theme }; } return userInfo.theme; }
+function syncStylePresetRadios(preset) { const target = normalizePresetKey(preset || userInfo.themePreset); const def = document.getElementById('stylePresetDefault'); const dark = document.getElementById('stylePresetDefaultDark'); const classic = document.getElementById('stylePresetClassic'); if (def) def.checked = target === 'default'; if (dark) dark.checked = target === 'default-dark'; if (classic) classic.checked = target === 'classic'; }
+
+function applyThemeFromUserInfo() {
+  const theme = ensureThemeConsistency();
+  try {
+    const root = document.documentElement;
+    if (document.body) { document.body.setAttribute('data-theme-preset', userInfo.themePreset); }
+    if (theme.paper) root.style.setProperty('--page-paper', theme.paper);
+    if (theme.text) root.style.setProperty('--page-text', theme.text);
+    if (theme.muted) root.style.setProperty('--page-muted', theme.muted);
+    if (theme.fontFamily) root.style.setProperty('--page-font-family', theme.fontFamily);
+    if (theme.bodyFontSize) root.style.setProperty('--page-body-font-size', theme.bodyFontSize);
+  } catch {}
+  updateStylePresetControls();
+}
+
+let themeTarget = 'paper';
+let workingTheme = null;
+let workingPreset = null;
+let themeModalWired = false;
+let themeClickAwayHandler = null;
+let themeKeyHandler = null;
+
+function getActivePreset() { return normalizePresetKey(workingPreset || userInfo.themePreset); }
+function applyThemeFromWorkingTheme() {
+  try {
+    const root = document.documentElement;
+    const activePreset = getActivePreset();
+    const defaults = getPresetDefaults(activePreset);
+    const t = workingTheme || userInfo.theme || defaults;
+    if (document.body) { document.body.setAttribute('data-theme-preset', activePreset); }
+    if (t.paper) root.style.setProperty('--page-paper', t.paper);
+    if (t.text) root.style.setProperty('--page-text', t.text);
+    if (t.muted) root.style.setProperty('--page-muted', t.muted);
+    if (t.fontFamily) root.style.setProperty('--page-font-family', t.fontFamily);
+    if (t.bodyFontSize) root.style.setProperty('--page-body-font-size', t.bodyFontSize);
+  } catch {}
+}
+function openThemeModal() {
+  const modal = document.getElementById('themeModal');
+  if (!modal) return;
+  modal.classList.add('show');
+  wireThemeModalInteractions();
+  if (!themeClickAwayHandler) {
+    themeClickAwayHandler = (e) => {
+      const m = document.getElementById('themeModal');
+      if (!m || !m.classList.contains('show')) return;
+      const content = m.querySelector('.modal-content');
+      if (content && !content.contains(e.target)) { closeThemeModal(); }
+    };
+    document.addEventListener('mousedown', themeClickAwayHandler, true);
+    document.addEventListener('touchstart', themeClickAwayHandler, true);
+    document.addEventListener('click', themeClickAwayHandler, true);
+  }
+  if (!themeKeyHandler) {
+    themeKeyHandler = (e) => { if (e.key === 'Escape') { closeThemeModal(); } };
+    document.addEventListener('keydown', themeKeyHandler, true);
+  }
+  workingPreset = userInfo.themePreset;
+  const activePreset = getActivePreset();
+  const defaults = getPresetDefaults(activePreset);
+  const base = userInfo.theme ? { ...defaults, ...userInfo.theme } : defaults;
+  workingTheme = { paper: base.paper || defaults.paper, text: base.text || defaults.text, muted: base.muted || defaults.muted, fontFamily: base.fontFamily || defaults.fontFamily, bodyFontSize: base.bodyFontSize || defaults.bodyFontSize };
+  syncThemeInputsToTarget();
+  updateThemeButtonsActive();
+  updateStyleTargetLabel();
+  updateStylePresetControls();
+  const ffSel = document.getElementById('fontFamilySelect');
+  const fsInput = document.getElementById('fontSizeInput');
+  if (ffSel) ffSel.value = workingTheme.fontFamily || defaults.fontFamily;
+  if (fsInput) fsInput.value = parseInt((workingTheme.bodyFontSize || defaults.bodyFontSize), 10);
+  if (ffSel) ffSel.onchange = () => { if (!workingTheme) workingTheme = { ...(userInfo.theme || defaults) }; workingTheme.fontFamily = ffSel.value; applyThemeFromWorkingTheme(); };
+  if (fsInput) fsInput.oninput = () => { const n = parseInt(fsInput.value, 10); if (!isFinite(n)) return; const clamped = Math.max(8, Math.min(32, n)); if (!workingTheme) workingTheme = { ...(userInfo.theme || defaults) }; workingTheme.bodyFontSize = String(clamped) + 'px'; applyThemeFromWorkingTheme(); };
+  const resetTypographyBtn = document.getElementById('resetTypographyBtn');
+  if (resetTypographyBtn) { resetTypographyBtn.onclick = () => { if (!workingTheme) workingTheme = { ...(userInfo.theme || defaults) }; workingTheme.fontFamily = defaults.fontFamily; workingTheme.bodyFontSize = defaults.bodyFontSize; if (ffSel) ffSel.value = defaults.fontFamily; if (fsInput) fsInput.value = parseInt(defaults.bodyFontSize, 10); applyThemeFromWorkingTheme(); }; }
+  toggleTypographyVisibility();
+}
+function closeThemeModal() {
+  const modal = document.getElementById('themeModal');
+  if (!modal) return;
+  modal.classList.remove('show');
+  applyThemeFromUserInfo();
+  workingTheme = null;
+  workingPreset = null;
+  if (themeClickAwayHandler) { document.removeEventListener('mousedown', themeClickAwayHandler, true); document.removeEventListener('touchstart', themeClickAwayHandler, true); document.removeEventListener('click', themeClickAwayHandler, true); themeClickAwayHandler = null; }
+  if (themeKeyHandler) { document.removeEventListener('keydown', themeKeyHandler, true); themeKeyHandler = null; }
+}
+function normalizeToHex(value) { if (!value) return '#000000'; let v = String(value).trim(); if (v[0] !== '#') v = '#' + v; if (v.length === 4) { v = '#' + v[1] + v[1] + v[2] + v[2] + v[3] + v[3]; } const ok = /^#[0-9a-fA-F]{6}$/.test(v); return ok ? v.toUpperCase() : '#000000'; }
+
+const themeBtn = document.getElementById('themeBtn');
+if (themeBtn) { themeBtn.addEventListener('click', () => { themeTarget = 'paper'; openThemeModal(); }); }
+
+const editFormBtn = document.getElementById('editFormBtn');
+if (editFormBtn) { editFormBtn.addEventListener('click', openUserForm); }
+
+const choosePageColor = document.getElementById('choosePageColor');
+const chooseTextColor = document.getElementById('chooseTextColor');
+const chooseMutedColor = document.getElementById('chooseMutedColor');
+function syncThemeInputsToTarget() { const colorPicker = document.getElementById('colorPicker'); const hexInput = document.getElementById('hexInput'); const defaults = getPresetDefaults(userInfo.themePreset); const current = (workingTheme && workingTheme[themeTarget]) || defaults[themeTarget] || '#000000'; const hex = normalizeToHex(current); if (colorPicker) colorPicker.value = hex; if (hexInput) hexInput.value = hex; }
+if (choosePageColor) choosePageColor.addEventListener('click', () => { themeTarget = 'paper'; syncThemeInputsToTarget(); updateThemeButtonsActive(); updateStyleTargetLabel(); toggleTypographyVisibility(); });
+if (chooseTextColor) chooseTextColor.addEventListener('click', () => { themeTarget = 'text'; syncThemeInputsToTarget(); updateThemeButtonsActive(); updateStyleTargetLabel(); toggleTypographyVisibility(); });
+if (chooseMutedColor) chooseMutedColor.addEventListener('click', () => { themeTarget = 'muted'; syncThemeInputsToTarget(); updateThemeButtonsActive(); updateStyleTargetLabel(); toggleTypographyVisibility(); });
+
+function toggleTypographyVisibility() { const typo = document.getElementById('typographyEditor'); if (!typo) return; if (themeTarget === 'text' || themeTarget === 'muted') { typo.hidden = false; } else { typo.hidden = true; } }
+function updateThemeButtonsActive() { const map = { paper: choosePageColor, text: chooseTextColor, muted: chooseMutedColor, }; [choosePageColor, chooseTextColor, chooseMutedColor].forEach(btn => { if (!btn) return; if (btn === map[themeTarget]) { btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true'); const isDarkUi = document.body && document.body.getAttribute('data-ui-theme') === 'dark'; if (isDarkUi) { btn.style.backgroundColor = '#fff'; btn.style.color = '#111'; btn.style.borderColor = '#555'; } else { btn.style.backgroundColor = ''; btn.style.color = ''; btn.style.borderColor = ''; } } else { btn.classList.remove('active'); btn.setAttribute('aria-pressed', 'false'); btn.style.backgroundColor = ''; btn.style.color = ''; btn.style.borderColor = ''; } }); }
+function updateStylePresetControls() { const summary = document.getElementById('stylePresetSummary'); const select = document.getElementById('stylePresetSelect'); const key = getActivePreset(); if (summary) summary.textContent = PRESET_LABELS[key] || PRESET_LABELS.default; if (select) select.value = key; }
+
+const stylePresetSelectEl = document.getElementById('stylePresetSelect');
+if (stylePresetSelectEl) {
+  stylePresetSelectEl.addEventListener('change', (e) => {
+    const selected = normalizePresetKey(e.target.value);
+    workingPreset = selected;
+    const defaults = getPresetDefaults(selected);
+    workingTheme = { ...defaults };
+    themeTarget = 'paper';
+    applyThemeFromWorkingTheme();
+    updateStylePresetControls();
+    updateThemeButtonsActive();
+    updateStyleTargetLabel();
+    syncThemeInputsToTarget();
+    const ffSel = document.getElementById('fontFamilySelect');
+    const fsInput = document.getElementById('fontSizeInput');
+    if (ffSel) ffSel.value = defaults.fontFamily;
+    if (fsInput) fsInput.value = parseInt(defaults.bodyFontSize, 10);
+    toggleTypographyVisibility();
+  });
+}
+
+const colorPickerEl = document.getElementById('colorPicker');
+const hexInputEl = document.getElementById('hexInput');
+if (colorPickerEl) colorPickerEl.addEventListener('input', (e) => { const v = normalizeToHex(e.target.value); if (!workingTheme) workingTheme = { ...(userInfo.theme || getPresetDefaults(userInfo.themePreset)) }; workingTheme[themeTarget] = v; if (hexInputEl) hexInputEl.value = v; applyThemeFromWorkingTheme(); });
+if (hexInputEl) hexInputEl.addEventListener('input', (e) => { const v = normalizeToHex(e.target.value); if (!workingTheme) workingTheme = { ...(userInfo.theme || getPresetDefaults(userInfo.themePreset)) }; workingTheme[themeTarget] = v; if (colorPickerEl) colorPickerEl.value = v; applyThemeFromWorkingTheme(); });
+
+const cancelThemeBtn = document.getElementById('cancelThemeBtn');
+if (cancelThemeBtn) cancelThemeBtn.addEventListener('click', closeThemeModal);
+
+const saveThemeBtn = document.getElementById('saveThemeBtn');
+if (saveThemeBtn) saveThemeBtn.addEventListener('click', async () => {
+  if (workingTheme) { const presetKey = getActivePreset(); userInfo.theme = { ...getPresetDefaults(presetKey), ...workingTheme }; userInfo.themePreset = presetKey; }
+  workingPreset = null;
+  applyThemeFromUserInfo();
+  try { localStorage.setItem('lastPortfolioJson', await getPortfolioPayload()); } catch {}
+  await saveUserInfo();
+  closeThemeModal();
+  renderPages();
+  markDirty();
+});
+
+const resetColorBtn = document.getElementById('resetColorBtn');
+if (resetColorBtn) resetColorBtn.addEventListener('click', () => {
+  const activePreset = getActivePreset();
+  const defaults = getPresetDefaults(activePreset);
+  if (!workingTheme) workingTheme = { ...(userInfo.theme || defaults) };
+  const def = defaults[themeTarget] || '#000000';
+  const defHex = normalizeToHex(def);
+  workingTheme[themeTarget] = defHex;
+  if (colorPickerEl) colorPickerEl.value = defHex;
+  if (hexInputEl) hexInputEl.value = defHex;
+  applyThemeFromWorkingTheme();
+});
+
+// EXIF
+async function extractExifYearFromDataUrl(dataUrl) {
+  try { const base64 = dataUrl.split(',')[1]; if (!base64) return null; const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0)); return extractExifYearFromBytes(bytes); } catch { return null; }
+}
+function extractExifYearFromBytes(bytes) {
+  let offset = 2;
+  while (offset + 4 < bytes.length) {
+    if (bytes[offset] !== 0xFF) break;
+    const marker = bytes[offset + 1];
+    const size = (bytes[offset + 2] << 8) + bytes[offset + 3];
+    if (marker === 0xE1) {
+      const start = offset + 4;
+      const end = start + size - 2;
+      if (bytes[start] === 0x45 && bytes[start + 1] === 0x78 && bytes[start + 2] === 0x69 && bytes[start + 3] === 0x66 && bytes[start + 4] === 0x00 && bytes[start + 5] === 0x00) {
+        const exifStart = start + 6;
+        const view = new DataView(bytes.buffer, bytes.byteOffset + exifStart, end - exifStart);
+        const tiffHeader = 0;
+        const little = (view.getUint16(tiffHeader, false) === 0x4949);
+        const getU16 = (pos) => view.getUint16(pos, little);
+        const getU32 = (pos) => view.getUint32(pos, little);
+        const ifd0Offset = getU32(tiffHeader + 4);
+        const exifIFDTag = 0x8769;
+        const dateTimeOriginalTag = 0x9003;
+        const exifIFDOffset = findIFDOffset(view, tiffHeader + ifd0Offset, exifIFDTag, little, tiffHeader);
+        if (exifIFDOffset) {
+          const dtoOffset = findIFDEntry(view, exifIFDOffset, dateTimeOriginalTag, little);
+          if (dtoOffset) {
+            const type = getU16(dtoOffset + 2);
+            const count = getU32(dtoOffset + 4);
+            let valOffset;
+            if (type === 2) {
+              if (count <= 4) { valOffset = dtoOffset + 8; }
+              else { const rel = getU32(dtoOffset + 8); valOffset = tiffHeader + rel; }
+              const str = readAscii(view, valOffset, count);
+              const year = parseYearFromExifDate(str);
+              return year;
+            }
+          }
+        }
+      }
+      break;
+    }
+    if (size < 2) break;
+    offset += 2 + size;
+  }
+  return null;
+}
+function findIFDOffset(view, ifdOffset, wantedTag, little, tiffHeader) { const getU16 = (pos) => view.getUint16(pos, little); const getU32 = (pos) => view.getUint32(pos, little); const numEntries = getU16(ifdOffset); for (let i = 0; i < numEntries; i++) { const entry = ifdOffset + 2 + i * 12; const tag = getU16(entry); if (tag === wantedTag) { const rel = getU32(entry + 8); return tiffHeader + rel; } } return null; }
+function findIFDEntry(view, ifdOffset, wantedTag, little) { const getU16 = (pos) => view.getUint16(pos, little); const numEntries = getU16(ifdOffset); for (let i = 0; i < numEntries; i++) { const entry = ifdOffset + 2 + i * 12; const tag = getU16(entry); if (tag === wantedTag) return entry; } return null; }
+function readAscii(view, offset, count) { const chars = []; for (let i = 0; i < count && offset + i < view.byteLength; i++) { const c = view.getUint8(offset + i); if (c === 0) break; chars.push(String.fromCharCode(c)); } return chars.join(''); }
+function parseYearFromExifDate(s) { const m = /^([0-9]{4})/.exec(s || ''); return m ? m[1] : null; }
+
+// Export PDF via jsPDF + html2canvas
+async function exportPortfolioAsPDF() {
+  try {
+    const lib = window.jspdf;
+    const h2c = window.html2canvas;
+    if (!lib || !lib.jsPDF || !h2c) { alert('PDF export is unavailable in this build.'); return; }
+    const { jsPDF } = lib;
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageEls = Array.from(document.querySelectorAll('#canvas .page'));
+    if (!pageEls.length) { alert('No pages to export.'); return; }
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    for (let i = 0; i < pageEls.length; i++) {
+      const el = pageEls[i];
+      const bgVar = getComputedStyle(document.documentElement).getPropertyValue('--paper');
+      const bg = (bgVar && bgVar.trim()) || '#ffffff';
+      const canvas = await h2c(el, { scale: 2, backgroundColor: bg });
+      const imgData = canvas.toDataURL('image/png');
+      // Fit image into A4 while preserving aspect ratio
+      const imgRatio = canvas.width / canvas.height;
+      let renderWidth = pageWidth;
+      let renderHeight = renderWidth / imgRatio;
+      if (renderHeight > pageHeight) {
+        renderHeight = pageHeight;
+        renderWidth = renderHeight * imgRatio;
+      }
+      const x = (pageWidth - renderWidth) / 2;
+      const y = (pageHeight - renderHeight) / 2;
+      if (i > 0) pdf.addPage();
+      pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
+    }
+    pdf.save('Portfolio.pdf');
+  } catch (e) {
+    alert('PDF export failed.');
+  }
+}
+
+document.getElementById('printBtn').addEventListener('click', exportPortfolioAsPDF);
+
+function getPortfolioPayload() {
+  return JSON.stringify({ appVersion: 'web', userInfo, pages }, null, 2);
+}
+
+// Helper: download text content as a file
+function downloadTextAsFile(text, filename) {
+  // Prefer Blob for modern browsers; use octet-stream to avoid inline preview
+  const blob = new Blob([text], { type: 'application/octet-stream' });
+  if (window.navigator && typeof window.navigator.msSaveOrOpenBlob === 'function') {
+    window.navigator.msSaveOrOpenBlob(blob, filename);
+    return;
+  }
+  let url = '';
+  try {
+    url = URL.createObjectURL(blob);
+  } catch {
+    url = 'data:application/json;charset=utf-8,' + encodeURIComponent(text);
+  }
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    if (url.startsWith('blob:')) try { URL.revokeObjectURL(url); } catch {}
+  }, 100);
+}
+
+// Save portfolio to localStorage; optionally trigger a JSON download
+async function saveCurrentPortfolio(shouldDownload = false) {
+  try {
+    const payload = await getPortfolioPayload();
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('lastPortfolioJson', payload);
+      localStorage.setItem('hasRun', '1');
+    }
+    if (shouldDownload) {
+      downloadTextAsFile(payload, 'Portfolio.json');
+    }
+    clearDirty();
+  } catch (e) {}
+}
+
+// Export / Import JSON buttons
+const newPortfolioBtn = document.getElementById('newPortfolioBtn');
+if (newPortfolioBtn) newPortfolioBtn.addEventListener('click', async () => {
+  try {
+    pages = [];
+    userInfo = {
+      name: '',
+      years: '',
+      statement: '',
+      instagram: '',
+      username: '',
+      email: '',
+      website: '',
+      websiteLabel: '',
+      additionalLinks: [],
+      portfolioLabel: 'Portfolio',
+      themePreset: 'default',
+      theme: { ...THEME_PRESETS.default }
+    };
+    ensureThemeConsistency();
+    applyThemeFromUserInfo();
+    buildCoverPage();
+    renderPages();
+    try { localStorage.setItem('hasRun', '1'); localStorage.setItem('lastPortfolioJson', getPortfolioPayload()); } catch {}
+    const uim = document.getElementById('userInfoModal');
+    if (uim) {
+      setUserFormMode(false);
+      uim.classList.add('show');
+      wireUserFormModalInteractions();
+    }
+    clearDirty();
+  } catch {}
+});
+
+const exportJsonBtn = document.getElementById('exportJsonBtn');
+if (exportJsonBtn) exportJsonBtn.addEventListener('click', async (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    const payload = getPortfolioPayload();
+    let saved = false;
+    // Try native save dialog when supported
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: 'Portfolio.json',
+          excludeAcceptAllOption: true,
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(payload);
+        await writable.close();
+        saved = true;
+      } catch (e) {
+        // If user cancels, just return silently
+        if (e && (e.name === 'AbortError' || e.code === 20)) return;
+      }
+    }
+    if (!saved) {
+      // Fallback to forced download
+      downloadTextAsFile(payload, 'Portfolio.json');
+    }
+    try { localStorage.setItem('lastPortfolioJson', payload); localStorage.setItem('hasRun', '1'); } catch {}
+    clearDirty();
+  } catch {}
+});
+
+const importJsonBtn = document.getElementById('importJsonBtn');
+if (importJsonBtn) importJsonBtn.addEventListener('click', async () => {
+  try {
+    const res = await (window.electronAPI && window.electronAPI.openPortfolio ? window.electronAPI.openPortfolio() : Promise.resolve({ success: false }));
+    if (res && res.success && res.data) {
+      try {
+        const obj = JSON.parse(res.data);
+        if (obj.userInfo) userInfo = obj.userInfo;
+        if (obj.pages) pages = obj.pages;
+        ensureThemeConsistency();
+        applyThemeFromUserInfo();
+        buildCoverPage();
+        renderPages();
+        clearDirty();
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('hasRun', '1');
+          localStorage.setItem('lastPortfolioJson', JSON.stringify({ appVersion: 'web', userInfo, pages }, null, 2));
+        }
+      } catch { alert('Invalid portfolio JSON'); }
+    }
+  } catch {}
+});
+
+// Initialize
+loadUserInfo();
+
+// Zoom controls
+const zoomSlider = document.getElementById('zoomSlider');
+const zoomValueEl = document.getElementById('zoomValue');
+const zoomControl = document.getElementById('zoomControl');
+let zoomHideTimer = null;
+function snap5(v) { return Math.round(v / 5) * 5; }
+function applyZoomFromValue(val) {
+  let v = parseInt(val, 10);
+  if (isNaN(v)) v = 100;
+  v = Math.max(50, Math.min(100, v));
+  v = snap5(v);
+  if (zoomSlider) zoomSlider.value = String(v);
+  if (zoomValueEl) zoomValueEl.textContent = v + '%';
+  const canvas = document.getElementById('canvas');
+  if (canvas) { canvas.style.transformOrigin = 'top center'; canvas.style.transform = `scale(${v / 100})`; }
+  if (typeof localStorage !== 'undefined') localStorage.setItem('zoom', String(v));
+}
+function showZoomOverlay() { if (zoomControl) zoomControl.classList.add('visible'); }
+function hideZoomOverlayDelayed(ms = 1200) { if (zoomHideTimer) clearTimeout(zoomHideTimer); zoomHideTimer = setTimeout(() => { if (zoomControl && !zoomControl.matches(':hover')) zoomControl.classList.remove('visible'); }, ms); }
+if (zoomSlider) { zoomSlider.addEventListener('input', (e) => { applyZoomFromValue(e.target.value); showZoomOverlay(); hideZoomOverlayDelayed(800); }); }
+try {
+  const canvas = document.getElementById('canvas');
+  if (canvas) {
+    canvas.addEventListener('mousemove', () => { showZoomOverlay(); hideZoomOverlayDelayed(1200); });
+    canvas.addEventListener('mouseenter', () => { showZoomOverlay(); });
+    canvas.addEventListener('mouseleave', () => { hideZoomOverlayDelayed(800); });
+  }
+  if (zoomControl) {
+    zoomControl.addEventListener('mouseenter', () => { showZoomOverlay(); if (zoomHideTimer) clearTimeout(zoomHideTimer); });
+    zoomControl.addEventListener('mouseleave', () => { hideZoomOverlayDelayed(600); });
+  }
+} catch {}
+try { const z = (typeof localStorage !== 'undefined') ? localStorage.getItem('zoom') : null; applyZoomFromValue(z ? parseInt(z, 10) : 100); } catch { applyZoomFromValue(100); }
