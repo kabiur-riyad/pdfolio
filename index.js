@@ -174,13 +174,19 @@ const THEME_PRESETS = {
 
 // Preferences modal wiring
 const preferencesModal = document.getElementById('preferencesModal');
-const prefUiDarkEl = document.getElementById('prefUiDark');
 const prefAutosaveEl = document.getElementById('prefAutosave');
 const cancelPrefsBtn = document.getElementById('cancelPrefsBtn');
 const savePrefsBtn = document.getElementById('savePrefsBtn');
+const preferencesBtn = document.getElementById('preferencesBtn');
 
 function openPreferences() {
-  if (prefUiDarkEl) prefUiDarkEl.checked = !!uiSettings.uiDark;
+  try {
+    const current = uiSettings.uiThemeMode || 'light';
+    const radios = preferencesModal ? preferencesModal.querySelectorAll('input[name="uiTheme"]') : null;
+    if (radios) {
+      radios.forEach(r => { if (r.value === current) r.checked = true; });
+    }
+  } catch {}
   if (prefAutosaveEl) prefAutosaveEl.checked = !!uiSettings.autosave;
   if (preferencesModal) preferencesModal.classList.add('show');
 }
@@ -268,16 +274,30 @@ if (window.electronAPI && window.electronAPI.onMenuPreferences) {
   window.electronAPI.onMenuPreferences(openPreferences);
 }
 
+if (preferencesBtn) {
+  preferencesBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    openPreferences();
+  });
+}
+
 if (cancelPrefsBtn) cancelPrefsBtn.addEventListener('click', () => {
   if (preferencesModal) preferencesModal.classList.remove('show');
 });
 
 if (savePrefsBtn) savePrefsBtn.addEventListener('click', () => {
-  const nextUiDark = !!(prefUiDarkEl && prefUiDarkEl.checked);
   const nextAutosave = !!(prefAutosaveEl && prefAutosaveEl.checked);
-  uiSettings.uiDark = nextUiDark;
+  let selectedMode = 'light';
+  try {
+    const checked = preferencesModal ? preferencesModal.querySelector('input[name="uiTheme"]:checked') : null;
+    if (checked && checked.value) selectedMode = checked.value;
+  } catch {}
+  uiSettings.uiThemeMode = selectedMode;
+  if (selectedMode === 'dark') uiSettings.uiDark = true;
+  else uiSettings.uiDark = false; // light or cozy
   uiSettings.autosave = nextAutosave;
   if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('uiTheme', selectedMode);
     localStorage.setItem('uiDark', uiSettings.uiDark ? '1' : '0');
     localStorage.setItem('autosave', uiSettings.autosave ? '1' : '0');
   }
@@ -321,19 +341,29 @@ let pages = [];
 
 let isDirty = false;
 
-// UI settings: dark mode and autosave
+// UI settings: UI theme mode (light/dark/cozy) and autosave
 const uiSettings = (() => {
   const ls = (typeof localStorage !== 'undefined') ? localStorage : null;
   const uiDarkPref = ls ? ls.getItem('uiDark') : null; // '1' | '0' | null
+  const uiThemePref = ls ? ls.getItem('uiTheme') : null; // 'light' | 'dark' | 'cozy' | null
   const autosavePref = ls ? ls.getItem('autosave') : null;
-  const systemDark = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
+  const validTheme = (v) => v === 'light' || v === 'dark' || v === 'cozy';
+  const themeMode = validTheme(uiThemePref) ? uiThemePref : 'light';
+  const explicitDark = uiDarkPref !== null ? (uiDarkPref === '1') : null;
+  const effectiveDark = themeMode === 'dark' ? true
+    : themeMode === 'cozy' ? false
+    : (explicitDark !== null ? explicitDark : false);
   const settings = {
-    // Default to light mode if no explicit preference is stored
-    uiDark: uiDarkPref === '1' ? true : uiDarkPref === '0' ? false : false,
+    uiThemeMode: themeMode,
+    uiDark: effectiveDark,
     autosave: autosavePref === '1'
   };
-  // Persist explicit light preference to avoid system scheme flips (e.g., during print)
-  try { if (ls && uiDarkPref === null) ls.setItem('uiDark', settings.uiDark ? '1' : '0'); } catch {}
+  try {
+    if (ls) {
+      ls.setItem('uiTheme', settings.uiThemeMode);
+      ls.setItem('uiDark', settings.uiDark ? '1' : '0');
+    }
+  } catch {}
   return settings;
 })();
 
@@ -341,13 +371,22 @@ function applyUiTheme() {
   try {
     if (document.body) {
       const forceLight = document.documentElement && document.documentElement.getAttribute('data-force-light') === '1';
-      const themeName = forceLight ? 'light' : (uiSettings.uiDark ? 'dark' : 'light');
+      let themeName = 'light';
+      if (forceLight) {
+        themeName = 'light';
+      } else if (uiSettings.uiThemeMode === 'cozy') {
+        themeName = 'cozy';
+      } else if (uiSettings.uiThemeMode === 'dark' || uiSettings.uiDark) {
+        themeName = 'dark';
+      } else {
+        themeName = 'light';
+      }
       document.body.setAttribute('data-ui-theme', themeName);
     }
     if (!(typeof __printing !== 'undefined' && __printing) && window.electronAPI && window.electronAPI.setNativeTheme) {
-      const source = (typeof localStorage !== 'undefined' && localStorage.getItem('uiDark') !== null)
-        ? (uiSettings.uiDark ? 'dark' : 'light')
-        : 'system';
+      const source = (typeof localStorage !== 'undefined' && localStorage.getItem('uiTheme') === 'dark')
+        ? 'dark'
+        : 'light';
       window.electronAPI.setNativeTheme(source);
     }
   } catch {}
@@ -463,6 +502,37 @@ async function loadUserInfo() {
 function wireFirstRunHandlers() {
   const createBtn = document.getElementById('createPortfolioBtn');
   const openBtn = document.getElementById('openPortfolioBtn');
+  const frThemeFieldset = document.getElementById('firstRunModal');
+  if (frThemeFieldset && frThemeFieldset.dataset.themeWired !== '1') {
+    frThemeFieldset.dataset.themeWired = '1';
+    const applyMode = (mode) => {
+      uiSettings.uiThemeMode = mode;
+      if (mode === 'dark') uiSettings.uiDark = true;
+      else uiSettings.uiDark = false; // light or cozy
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('uiTheme', mode);
+          localStorage.setItem('uiDark', uiSettings.uiDark ? '1' : '0');
+        }
+      } catch {}
+      applyUiTheme();
+    };
+    const radios = frThemeFieldset.querySelectorAll('input[name="firstRunUiTheme"]');
+    try {
+      const current = uiSettings.uiThemeMode || 'light';
+      radios.forEach(r => { if (r.value === current) r.checked = true; });
+    } catch {}
+    radios.forEach(r => {
+      r.addEventListener('change', () => {
+        if (r.checked) applyMode(r.value);
+      });
+    });
+    // Apply initial
+    try {
+      const checked = frThemeFieldset.querySelector('input[name="firstRunUiTheme"]:checked');
+      applyMode(checked && checked.value ? checked.value : (uiSettings.uiThemeMode || 'light'));
+    } catch { applyMode(uiSettings.uiThemeMode || 'light'); }
+  }
   if (createBtn) createBtn.onclick = async () => {
     try {
       const initial = await getPortfolioPayload();

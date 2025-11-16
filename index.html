@@ -4,13 +4,35 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.buymeacoffee.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://cdn.buymeacoffee.com;">
-  <title>PDFolio: OSS PDF Portfolio Generator</title>
+  <title>PDFolio Web – Open-source PDF Portfolio Generator</title>
+  <meta name="description" content="PDFolio is an open-source, browser-based portfolio builder that lets photographers and visual artists create beautiful, print-ready PDF portfolios directly from images.">
+  <meta name="robots" content="index,follow">
+  <meta name="keywords" content="PDF portfolio, photography portfolio, PDFolio, portfolio generator, print-ready portfolio, web portfolio to PDF">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PDFolio Web – Open-source PDF Portfolio Generator">
+  <meta property="og:description" content="Drag and drop your images, organize projects, and export a clean, print-ready PDF portfolio. Runs entirely in your browser with no sign-up.">
+  <meta property="og:image" content="./assets/icon.ico">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="PDFolio Web – Open-source PDF Portfolio Generator">
+  <meta name="twitter:description" content="Create beautiful PDF portfolios in your browser using PDFolio, a minimal open-source portfolio builder for photographers.">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "PDFolio Web",
+    "applicationCategory": "Multimedia",
+    "operatingSystem": "Web Browser",
+    "description": "PDFolio Web is an open-source portfolio builder that runs entirely in your browser and exports print-ready PDF portfolios.",
+    "license": "https://opensource.org/licenses/MIT"
+  }
+  </script>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./ui.css">
   <link rel="stylesheet" href="./styles.css">
   <link rel="icon" href="./assets/icon.ico" type="image/x-icon">
 </head>
 <body>
+  <h1 style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;">PDFolio – Open-source PDF portfolio generator for photographers and visual artists</h1>
   <!-- User Info Modal -->
   <div id="userInfoModal" class="modal">
     <div class="modal-content">
@@ -66,7 +88,38 @@
   <div id="preferencesModal" class="modal">
     <div class="modal-content">
       <h2>Preferences</h2>
-      <label><input type="checkbox" id="prefUiDark"> Enable Dark Mode</label>
+      <fieldset class="form-style-preset" style="margin-top:0">
+        <legend>UI Theme</legend>
+        <div class="style-choice">
+          <label class="style-choice-option">
+            <input type="radio" name="uiTheme" value="light" checked>
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#f5f5f5;border:1px solid rgba(0,0,0,0.12)"></span>
+                <span>Light</span>
+              </span>
+            </span>
+          </label>
+          <label class="style-choice-option">
+            <input type="radio" name="uiTheme" value="dark">
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#121212;border:1px solid rgba(0,0,0,0.4)"></span>
+                <span>Dark</span>
+              </span>
+            </span>
+          </label>
+          <label class="style-choice-option">
+            <input type="radio" name="uiTheme" value="cozy">
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#faf6f1;border:1px solid #eadfd4"></span>
+                <span>Cozy</span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
       <label><input type="checkbox" id="prefAutosave"> Enable Autosave</label>
       <div class="buttons">
         <button type="button" id="cancelPrefsBtn" class="btn secondary">Cancel</button>
@@ -83,6 +136,38 @@
       <p class="small" style="margin:0 0 8px 0;color:var(--muted)">It runs entirely in your browser. Your images and text never leave your device.</p>
       <p class="small" style="margin:0 0 8px 0;color:var(--muted)">It’s open‑source software and free to use.</p>
       <p class="small" style="margin:0 0 16px 0;color:var(--muted)">For best stability, the desktop version of <a href="https://github.com/kabiur-riyad/PDFolio-Desktop" target="_blank" rel="noopener">PDFolio</a> is more tested and has fewer bugs.</p>
+      <fieldset class="form-style-preset" style="margin:0 0 12px 0">
+        <legend class="small" style="padding:0 6px">UI Theme</legend>
+        <div class="style-choice">
+          <label class="style-choice-option">
+            <input type="radio" name="firstRunUiTheme" value="light" checked>
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#f5f5f5;border:1px solid rgba(0,0,0,0.12)"></span>
+                <span>Light</span>
+              </span>
+            </span>
+          </label>
+          <label class="style-choice-option">
+            <input type="radio" name="firstRunUiTheme" value="dark">
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#121212;border:1px solid rgba(0,0,0,0.4)"></span>
+                <span>Dark</span>
+              </span>
+            </span>
+          </label>
+          <label class="style-choice-option">
+            <input type="radio" name="firstRunUiTheme" value="cozy">
+            <span class="style-choice-pill">
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                <span style="width:14px;height:14px;border-radius:999px;background:#faf6f1;border:1px solid #eadfd4"></span>
+                <span>Cozy</span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
       <div class="buttons" style="display:flex;gap:8px;justify-content:flex-end">
         <button type="button" id="openPortfolioBtn" class="btn secondary">Open…</button>
         <button type="button" id="createPortfolioBtn" class="btn">Create New</button>
@@ -236,10 +321,14 @@
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 7.07 17.07a1.5 1.5 0 0 0-1.06-2.56H16a2 2 0 0 1-2-2v-2a4 4 0 0 0-4-4H7.5A1.5 1.5 0 0 1 6.44 6.5A10 10 0 0 1 12 2Z"/></svg>
         <span>Style</span>
       </button>
-
       <button id="editFormBtn" class="btn secondary">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm14.71-9.04a.996.996 0 0 0 0-1.41l-2.54-2.54a.996.996 0 1 0-1.41 1.41l2.54 2.54c.39.39 1.02.39 1.41 0z"/></svg>
         <span>Edit Form</span>
+      </button>
+
+      <button id="preferencesBtn" class="btn secondary">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8Zm9.54 3.5l-1.74-1a7.23 7.23 0 0 0-.54-1.3l.33-1.94a1 1 0 0 0-.78-1.15l-1.9-.45a1 1 0 0 0-1.14.57l-.8 1.8a7.27 7.27 0 0 0-1.5 0l-.8-1.8a1 1 0 0 0-1.14-.57l-1.9.45a1 1 0 0 0-.78 1.15l.33 1.94a7.23 7.23 0 0 0-.54 1.3l-1.74 1a1 1 0 0 0-.36 1.36l1 1.73a1 1 0 0 0 1.28.44l1.8-.8a7.27 7.27 0 0 0 1.3.75l.28 1.95a1 1 0 0 0 1 .86h2a1 1 0 0 0 1-.86l.28-1.95a7.27 7.27 0 0 0 1.3-.75l1.8.8a1 1 0 0 0 1.28-.44l1-1.73a1 1 0 0 0-.36-1.36Z"/></svg>
+        <span>Preferences</span>
       </button>
 
       <h3 class="sidebar-heading">Pages</h3>
