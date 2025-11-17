@@ -30,13 +30,7 @@ A minimalist, browser-based application for creating beautiful, print-ready phot
 
 ## Getting Started
 
-### Option 1: Open locally
-
-1. Clone or download this repository.
-2. Open `index.html` in a modern browser (Chrome, Edge, Firefox, or Safari).
-3. Start dragging images into the dropzone and configure your pages.
-
-> For best results, serve the folder via a small static file server (so that all browser features work consistently across environments).
+### Option 1: Visit the <Github Page>(https://kabiur-riyad.github.io/pdfolio)
 
 ### Option 2: Deploy as a static site
 
