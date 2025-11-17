@@ -30,7 +30,7 @@ A minimalist, browser-based application for creating beautiful, print-ready phot
 
 ## Getting Started
 
-### Option 1: Visit the <Github Page>(https://kabiur-riyad.github.io/pdfolio)
+### Option 1: Visit the [Github Page](https://kabiur-riyad.github.io/pdfolio)
 
 ### Option 2: Deploy as a static site
 
@@ -67,3 +67,4 @@ Then open the printed URL (often `http://localhost:3000` or similar) in your bro
 ## Related Project
 
 - **PDFolio Desktop** – Original desktop application for building PDF portfolios: <https://github.com/kabiur-riyad/PDFolio-Desktop>
+
